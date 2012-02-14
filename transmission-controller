@@ -81,6 +81,21 @@ def control_transmission():
 
     for torrent in torrents:
         LOG.debug("Checking torrent %s (%s)...", torrent.name, torrent.status)
+# TODO
+#        import pprint
+#        pprint.pprint(torrent.fields)
+
+        if SETTINGS.get("max-announce-interval", 0) > 0 and torrent.status != "stopped":
+            last_announce = 0
+            for tracker_stats in torrent.trackerStats:
+                if tracker_stats["lastAnnounceTime"] > last_announce:
+                    last_announce = tracker_stats["lastAnnounceTime"]
+
+            if time.time() >= last_announce + SETTINGS["max-announce-interval"]:
+                LOG.debug("Reannouncing torrent %s...", torrent.name)
+                # TODO: doesn't work without patching transmission if tracker
+                # sends its own min announce interval
+                TRANSMISSION.reannounce(torrent.hashString)
 
         if torrent.doneDate:
             db_torrent = get_db_torrent(torrent)
@@ -170,7 +185,7 @@ def main():
     if debug_mode:
         pycl.log.setup(debug_mode = True)
     else:
-        pycl.log.setup(level = logging.ERROR)
+        pycl.log.setup(level = logging.ERROR if cron_mode else None)
 
 
     pid_file = "/var/run/lock/transmission-controller"
@@ -183,7 +198,6 @@ def main():
         else:
             raise
     else:
-        time.sleep(10)
         try:
             global SETTINGS
             with open(os.path.expanduser("~/.config/transmission-daemon/settings.json"), "r") as config:
@@ -225,6 +239,5 @@ def torrent_coll():
     return db()["torrents"]
 
 
-# TODO: reannounce
 if __name__ == "__main__":
     main()
