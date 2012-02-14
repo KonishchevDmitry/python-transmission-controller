@@ -3,6 +3,7 @@
 """Controls transmission daemon to save user from routine operations."""
 
 import errno
+import getopt
 import json
 import logging
 import os
@@ -20,7 +21,7 @@ import transmissionrpc.client
 import pycl.daemon
 import pycl.log
 import pycl.misc
-from pycl.core import Error
+from pycl.core import Error, LogicalError
 
 LOG = logging.getLogger("transmission-controller")
 
@@ -71,7 +72,7 @@ def cleanup_fs(torrents):
         LOG.error("Failed to cleanup the filesystem: %s", e)
 
 
-def control_transmission():
+def control_transmission(action = None):
     """Controls the Transmission."""
 
     torrents = TRANSMISSION.info().values()
@@ -80,12 +81,19 @@ def control_transmission():
     removable_torrents = []
 
     for torrent in torrents:
-        LOG.debug("Checking torrent %s (%s)...", torrent.name, torrent.status)
-# TODO
-#        import pprint
-#        pprint.pprint(torrent.fields)
+        status = torrent.status
+        LOG.debug("Checking torrent %s (%s)...", torrent.name, status)
 
-        if SETTINGS.get("max-announce-interval", 0) > 0 and torrent.status != "stopped":
+        if action == "start" and status == "stopped":
+            LOG.info("Starting torrent %s...", torrent.name)
+            TRANSMISSION.start(torrent.hashString)
+            status = "seeding" if torrent.doneDate else "downloading"
+        elif action == "stop" and status != "stopped":
+            LOG.info("Stopping torrent %s...", torrent.name)
+            TRANSMISSION.stop(torrent.hashString)
+            status = "stopped"
+
+        if SETTINGS.get("max-announce-interval", 0) > 0 and status != "stopped":
             last_announce = 0
             for tracker_stats in torrent.trackerStats:
                 if tracker_stats["lastAnnounceTime"] > last_announce:
@@ -178,9 +186,32 @@ def get_torrent_uuid(torrent):
 def main():
     """The script's main function."""
 
-    args = sys.argv[1:]
-    debug_mode = "--debug" in args
-    cron_mode = "--cron" in args
+    # Parsing command line arguments -->
+    cron_mode = False
+    debug_mode = False
+    action = None
+
+    cmd_options, args = getopt.gnu_getopt(
+        sys.argv[1:], "", [
+            "cron",
+            "debug",
+            "start-all",
+            "stop-all",
+        ])
+
+    for option, value in cmd_options[:]:
+        if option == "--cron":
+            cron_mode = True
+        elif option == "--debug":
+            debug_mode = True
+        elif option == "--start-all":
+            action = "start"
+        elif option == "--stop-all":
+            action = "stop"
+        else:
+            raise LogicalError()
+    # Parsing command line arguments <--
+
 
     if debug_mode:
         pycl.log.setup(debug_mode = True)
@@ -207,7 +238,7 @@ def main():
             TRANSMISSION = transmissionrpc.client.Client(
                 user = SETTINGS["rpc-username"], password = SETTINGS["rpc-plain-password"])
 
-            control_transmission()
+            control_transmission(action)
         finally:
             pycl.misc.syscall_wrapper(os.close, pid_file_fd)
             pycl.misc.syscall_wrapper(os.unlink, pid_file)
