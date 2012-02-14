@@ -10,13 +10,16 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 import pymongo
 
 import transmissionrpc.client
 
+import pycl.daemon
 import pycl.log
+import pycl.misc
 from pycl.core import Error
 
 LOG = logging.getLogger("transmission-controller")
@@ -160,20 +163,40 @@ def get_torrent_uuid(torrent):
 def main():
     """The script's main function."""
 
-    if "--debug" in sys.argv[1:]:
+    args = sys.argv[1:]
+    debug_mode = "--debug" in args
+    cron_mode = "--cron" in args
+
+    if debug_mode:
         pycl.log.setup(debug_mode = True)
     else:
         pycl.log.setup(level = logging.ERROR)
 
-    global SETTINGS
-    with open(os.path.expanduser("~/.config/transmission-daemon/settings.json"), "r") as config:
-        SETTINGS = json.load(config)
 
-    global TRANSMISSION
-    TRANSMISSION = transmissionrpc.client.Client(
-        user = SETTINGS["rpc-username"], password = SETTINGS["rpc-plain-password"])
+    pid_file = "/var/run/lock/transmission-controller"
 
-    control_transmission()
+    try:
+        pid_file_fd = pycl.daemon.acquire_pidfile(pid_file)
+    except pycl.daemon.PidFileLocked as e:
+        if cron_mode:
+            LOG.debug("Exiting: %s", e)
+        else:
+            raise
+    else:
+        time.sleep(10)
+        try:
+            global SETTINGS
+            with open(os.path.expanduser("~/.config/transmission-daemon/settings.json"), "r") as config:
+                SETTINGS = json.load(config)
+
+            global TRANSMISSION
+            TRANSMISSION = transmissionrpc.client.Client(
+                user = SETTINGS["rpc-username"], password = SETTINGS["rpc-plain-password"])
+
+            control_transmission()
+        finally:
+            pycl.misc.syscall_wrapper(os.close, pid_file_fd)
+            pycl.misc.syscall_wrapper(os.unlink, pid_file)
 
 
 def remove_old_db_torrents(torrents):
@@ -202,7 +225,6 @@ def torrent_coll():
     return db()["torrents"]
 
 
-# TODO: lockfile
 # TODO: reannounce
 if __name__ == "__main__":
     main()
