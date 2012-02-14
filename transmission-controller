@@ -1,0 +1,208 @@
+#!/usr/bin/env python
+
+"""Controls transmission daemon to save user from routine operations."""
+
+import errno
+import json
+import logging
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+import pymongo
+
+import transmissionrpc.client
+
+import pycl.log
+from pycl.core import Error
+
+LOG = logging.getLogger("transmission-controller")
+
+
+def check_free_space(download_dir):
+    """Checks whether we have enough free space on the disk."""
+
+    if SETTINGS.get("free-space-threshold", -1) < 0:
+        return True
+
+    process = subprocess.Popen([ "df", download_dir ],
+        stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+    stdout, stderr = process.communicate()
+
+    if process.returncode:
+        raise Error("df returned an error for {0}: {1}.",
+            download_dir, stderr.replace("\n", " ").strip())
+
+    stat = re.sub(r" +", " ", stdout.split("\n")[1]).split(" ")
+    device = stat[0]
+    usage = stat[4]
+    free_space = 100 - int(re.match(r"^(\d+)%$", usage).group(1))
+
+    if free_space <= SETTINGS["free-space-threshold"]:
+        LOG.info("We don't have enough free space on %s: %s%% vs %s%%.",
+            device, free_space, SETTINGS["free-space-threshold"])
+        return False
+    else:
+        return True
+
+
+def cleanup_fs(torrents):
+    """Removes seeding torrents if free space on the disk is too small."""
+
+    try:
+        download_dir = SETTINGS["download-dir"]
+
+        if torrents and not check_free_space(download_dir):
+            torrents = sorted(torrents, cmp = lambda a, b: cmp(a.doneDate, b.doneDate))
+
+            for torrent in torrents:
+                LOG.info("Removing torrent %s to get a free space on the disk...", torrent.name)
+                remove_torrent(torrent)
+
+                if check_free_space(download_dir):
+                    break
+    except Exception as e:
+        LOG.error("Failed to cleanup the filesystem: %s", e)
+
+
+def control_transmission():
+    """Controls the Transmission."""
+
+    torrents = TRANSMISSION.info().values()
+    remove_old_db_torrents(torrents)
+
+    removable_torrents = []
+
+    for torrent in torrents:
+        LOG.debug("Checking torrent %s (%s)...", torrent.name, torrent.status)
+
+        if torrent.doneDate:
+            db_torrent = get_db_torrent(torrent)
+
+            if SETTINGS.get("copy-to-dir") and not db_torrent["copied"]:
+                LOG.info("Copying torrent %s:", torrent.name)
+                copy_torrent(torrent, SETTINGS["copy-to-dir"])
+                db_torrent["copied"] = True
+                save_db_torrent(db_torrent)
+
+            if (
+                SETTINGS.get("max-seed-time", -1) >= 0 and
+                time.time() - torrent.doneDate >= SETTINGS["max-seed-time"]
+            ):
+                LOG.info("Torrent %s has seeded enough time to delete it. Deleting it...", torrent.name)
+                remove_torrent(torrent)
+            else:
+                removable_torrents.append(torrent)
+
+    cleanup_fs(removable_torrents)
+
+
+def copy_torrent(torrent, destination):
+    """Copies the specified torrent to the "copy to" dir."""
+
+    for torrent_file in torrent.files().itervalues():
+        if not torrent_file["selected"]:
+            continue
+
+        path = os.path.normpath(torrent_file["name"]).strip("/")
+        LOG.debug("Copying file %s...", path)
+
+        try:
+            os.makedirs(os.path.join(destination, os.path.dirname(path)), 0750)
+        except EnvironmentError as e:
+            if e.errno != errno.EEXIST:
+                raise e
+
+        fd = os.open(os.path.join(destination, path),
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0640)
+
+        try:
+            shutil.copyfile(
+                os.path.join(torrent.downloadDir, path),
+                os.path.join(destination, path))
+        finally:
+            os.close(fd)
+
+
+def db():
+    """Returns the database connection."""
+
+    return pymongo.Connection()["transmission-controller"]
+
+
+def get_db_torrent(torrent):
+    """Returns torrent info from the database."""
+
+    uuid = get_torrent_uuid(torrent)
+
+    torrent_info = torrent_coll().find_one({ "_id": uuid })
+
+    if torrent_info is None:
+        torrent_info = {
+            "_id":    uuid,
+            "name":   torrent.name,
+            "copied": False,
+        }
+
+    return torrent_info
+
+
+def get_torrent_uuid(torrent):
+    """Returns UUID of the specified torrent."""
+
+    return "{0}:{1}:{2}".format(
+        torrent.id, torrent.hashString, torrent.addedDate)
+
+
+def main():
+    """The script's main function."""
+
+    if "--debug" in sys.argv[1:]:
+        pycl.log.setup(debug_mode = True)
+    else:
+        pycl.log.setup(level = logging.ERROR)
+
+    global SETTINGS
+    with open(os.path.expanduser("~/.config/transmission-daemon/settings.json"), "r") as config:
+        SETTINGS = json.load(config)
+
+    global TRANSMISSION
+    TRANSMISSION = transmissionrpc.client.Client(
+        user = SETTINGS["rpc-username"], password = SETTINGS["rpc-plain-password"])
+
+    control_transmission()
+
+
+def remove_old_db_torrents(torrents):
+    """Removes all unexisting torrents from the database."""
+
+    torrent_coll().remove(
+        { "_id": { "$nin": [ get_torrent_uuid(torrent) for torrent in torrents ] } }, safe = True)
+
+
+def remove_torrent(torrent):
+    """Removes the specified torrent."""
+
+# TODO
+#    TRANSMISSION.remove(torrent.hashString, delete_data = True)
+
+
+def save_db_torrent(db_torrent):
+    """Saves the torrent info to the database."""
+
+    torrent_coll().save(db_torrent, safe = True)
+
+
+def torrent_coll():
+    """Returns collection with torrent info."""
+
+    return db()["torrents"]
+
+
+# TODO: lockfile
+# TODO: reannounce
+if __name__ == "__main__":
+    main()
