@@ -57,11 +57,13 @@ def cleanup_fs(torrents):
     """Removes seeding torrents if free space on the disk is too small."""
 
     try:
-        download_dir = SETTINGS["download-dir"]
+        download_dir = os.path.normpath(SETTINGS["download-dir"])
+
+        torrents = sorted(
+            ( torrent for torrent in torrents if os.path.normpath(torrent.downloadDir) == download_dir ),
+            cmp = lambda a, b: cmp(a.doneDate, b.doneDate))
 
         if torrents and not check_free_space(download_dir):
-            torrents = sorted(torrents, cmp = lambda a, b: cmp(a.doneDate, b.doneDate))
-
             for torrent in torrents:
                 LOG.info("Removing torrent %s to get a free space on the disk...", torrent.name)
                 remove_torrent(torrent)
