@@ -258,8 +258,7 @@ def remove_old_db_torrents(torrents):
 def remove_torrent(torrent):
     """Removes the specified torrent."""
 
-# TODO
-#    TRANSMISSION.remove(torrent.hashString, delete_data = True)
+    TRANSMISSION.remove(torrent.hashString, delete_data = True)
 
 
 def save_db_torrent(db_torrent):
