@@ -21,6 +21,8 @@ import transmissionrpc.client
 import pycl.daemon
 import pycl.log
 import pycl.misc
+
+from pycl import constants
 from pycl.core import Error, LogicalError
 
 LOG = logging.getLogger("transmission-controller")
@@ -104,10 +106,10 @@ def control_transmission(action = None):
                 if tracker_stats["lastAnnounceTime"] > last_announce:
                     last_announce = tracker_stats["lastAnnounceTime"]
 
-            if time.time() >= last_announce + SETTINGS["max-announce-interval"]:
-                LOG.debug("Reannouncing torrent %s...", torrent.name)
-                # TODO: doesn't work without patching transmission if tracker
+            if time.time() >= last_announce + SETTINGS["max-announce-interval"] * constants.MINUTE_SECONDS:
+                # Notice: doesn't work without patching transmission if tracker
                 # sends its own min announce interval
+                LOG.debug("Reannouncing torrent %s...", torrent.name)
                 TRANSMISSION.reannounce(torrent.hashString)
 
         if torrent.doneDate:
