@@ -242,7 +242,8 @@ def main():
 
             global TRANSMISSION
             TRANSMISSION = transmissionrpc.client.Client(
-                user = SETTINGS["rpc-username"], password = SETTINGS["rpc-plain-password"])
+                user = SETTINGS["rpc-username"], password = SETTINGS["rpc-plain-password"],
+                timeout = constants.MINUTE_SECONDS)
 
             control_transmission(action)
         finally:
