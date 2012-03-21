@@ -295,13 +295,14 @@ def torrent_downloaded(torrent):
             if match is not None:
                 tv_show_name = match.group(1)
 
-            copy_to = os.path.join(SETTINGS["copy-tv-shows-to-dir"], tv_show_name)
+            if tv_show_name in ( name.strip() for name in SETTINGS.get("copy-tv-shows", "").split(",") if name.strip() ):
+                copy_to = os.path.join(SETTINGS["copy-tv-shows-to-dir"], tv_show_name)
 
-            try:
-                os.mkdir(copy_to, 0750)
-            except EnvironmentError as e:
-                if e.errno != errno.EEXIST:
-                    raise e
+                try:
+                    os.mkdir(copy_to, 0750)
+                except EnvironmentError as e:
+                    if e.errno != errno.EEXIST:
+                        raise e
 
     if copy_to:
         copy_torrent(torrent, copy_to)
