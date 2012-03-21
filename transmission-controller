@@ -130,7 +130,7 @@ def control_transmission(action = None):
 def copy_torrent(torrent, destination):
     """Copies the specified torrent to the "copy to" dir."""
 
-    LOG.info("Copying torrent %s:", torrent.name)
+    LOG.info("Copying torrent %s to %s:", torrent.name, destination)
 
     for torrent_file in torrent.files().itervalues():
         if not torrent_file["selected"]:
@@ -283,7 +283,7 @@ def torrent_downloaded(torrent):
 
     if SETTINGS.get("copy-tv-shows-to-dir"):
         # Check whether this is a TV show
-        match = re.match(r"(.+)[._](?:s\d+e\d+|\d+x\d+)[._]", file_name, re.IGNORECASE)
+        match = re.match(r"(.+)[._](?:s\d+e\d+|\d+x\d+)[._]", torrent.name, re.IGNORECASE)
 
         if match is not None:
             # Get the TV show name from the different file naming formats
@@ -303,7 +303,6 @@ def torrent_downloaded(torrent):
                 except EnvironmentError as e:
                     if e.errno != errno.EEXIST:
                         raise e
-
     if copy_to:
         copy_torrent(torrent, copy_to)
         db_torrent["copied"] = True
