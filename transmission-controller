@@ -62,7 +62,7 @@ def cleanup_fs(torrents):
     """Removes seeding torrents if free space on the disk is too small."""
 
     try:
-        download_dir = os.path.normpath(SETTINGS["download-dir"])
+        download_dir = os.path.normpath(os.path.expanduser(SETTINGS["download-dir"]))
 
         torrents = sorted(
             ( torrent for torrent in torrents if os.path.normpath(torrent.downloadDir) == download_dir ),
@@ -279,7 +279,7 @@ def torrent_downloaded(torrent):
     if db_torrent["copied"]:
         return
 
-    copy_to = SETTINGS.get("copy-to-dir")
+    copy_to = os.path.expanduser(SETTINGS.get("copy-to-dir"))
 
     if SETTINGS.get("copy-tv-shows-to-dir"):
         # Check whether this is a TV show
@@ -296,7 +296,8 @@ def torrent_downloaded(torrent):
                 tv_show_name = match.group(1)
 
             if tv_show_name in ( name.strip() for name in SETTINGS.get("copy-tv-shows", "").split(",") if name.strip() ):
-                copy_to = os.path.join(SETTINGS["copy-tv-shows-to-dir"], tv_show_name)
+                copy_to = os.path.join(
+                    os.path.expanduser(SETTINGS["copy-tv-shows-to-dir"]), tv_show_name)
 
                 try:
                     os.mkdir(copy_to, 0750)
