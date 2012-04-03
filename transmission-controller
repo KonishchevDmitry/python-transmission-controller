@@ -295,7 +295,7 @@ def torrent_downloaded(torrent):
             if match is not None:
                 tv_show_name = match.group(1)
 
-            if tv_show_name in ( name.strip() for name in SETTINGS.get("copy-tv-shows", "").split(",") if name.strip() ):
+            if tv_show_name.lower() in ( name.strip().lower() for name in SETTINGS.get("copy-tv-shows", "").split(",") if name.strip() ):
                 copy_to = os.path.join(
                     os.path.expanduser(SETTINGS["copy-tv-shows-to-dir"]), tv_show_name)
 
