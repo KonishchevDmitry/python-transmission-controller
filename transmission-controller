@@ -25,7 +25,8 @@ import pycl.misc
 
 from pycl import constants
 from pycl.core import Error, LogicalError
-from pycl.misc import to_system_encoding
+from pycl.misc import to_unicode as U
+from pycl.misc import to_system_encoding as S
 
 LOG = logging.getLogger("transmission-controller")
 
@@ -39,7 +40,7 @@ def check_free_space(download_dir):
     # df gives a different output for "dir" and "dir/"
     download_dir += "/"
 
-    process = subprocess.Popen([ "df", to_system_encoding(download_dir) ],
+    process = subprocess.Popen([ "df", S(download_dir) ],
         stdout = subprocess.PIPE, stderr = subprocess.PIPE)
     stdout, stderr = process.communicate()
 
@@ -126,6 +127,7 @@ def control_transmission(action = None):
             else:
                 removable_torrents.append(torrent)
 
+    move_copied_torrents()
     cleanup_fs(removable_torrents)
 
 
@@ -142,19 +144,18 @@ def copy_torrent(torrent, destination):
         LOG.debug(u"Copying file %s...", path)
 
         try:
-            os.makedirs(to_system_encoding(
-                os.path.join(destination, os.path.dirname(path))), 0750)
+            os.makedirs(S(os.path.join(destination, os.path.dirname(path))), 0750)
         except EnvironmentError as e:
             if e.errno != errno.EEXIST:
                 raise e
 
-        fd = os.open(to_system_encoding(os.path.join(destination, path)),
+        fd = os.open(S(os.path.join(destination, path)),
             os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0640)
 
         try:
             shutil.copyfile(
-                to_system_encoding(os.path.join(torrent.downloadDir, path)),
-                to_system_encoding(os.path.join(destination, path)))
+                S(os.path.join(torrent.downloadDir, path)),
+                S(os.path.join(destination, path)))
         finally:
             os.close(fd)
 
@@ -249,7 +250,41 @@ def main():
             control_transmission(action)
         finally:
             pycl.misc.syscall_wrapper(os.close, pid_file_fd)
-            pycl.misc.syscall_wrapper(os.unlink, to_system_encoding(pid_file))
+            pycl.misc.syscall_wrapper(os.unlink, S(pid_file))
+
+
+def move_copied_torrents():
+    """Moves all copied torrents to the specified directory."""
+
+    copy_to = os.path.expanduser(SETTINGS.get("copy-to-dir", ""))
+    move_to = os.path.expanduser(SETTINGS.get("move-copied-to-dir", ""))
+
+    if not copy_to or not move_to:
+        return
+
+    for item in os.listdir(S(copy_to)):
+        item = U(item)
+        item_path = os.path.join(copy_to, item)
+
+        LOG.info(u"Moving %s to %s...", item_path, move_to if move_to.endswith("/") else move_to + "/")
+
+        for dup_id in xrange(0, 10):
+            if dup_id:
+                dest_item_path = os.path.join(move_to, u"DUP_{0}.{1}".format(dup_id, item))
+            else:
+                dest_item_path = os.path.join(move_to, item)
+
+            try:
+                os.stat(S(dest_item_path))
+            except EnvironmentError as e:
+                if e.errno == errno.ENOENT:
+                    break
+                else:
+                    raise
+        else:
+            raise LogicalError()
+
+        os.rename(S(item_path), S(dest_item_path))
 
 
 def remove_old_db_torrents(torrents):
@@ -284,7 +319,7 @@ def torrent_downloaded(torrent):
     if db_torrent["copied"]:
         return
 
-    copy_to = os.path.expanduser(SETTINGS.get("copy-to-dir"))
+    copy_to = os.path.expanduser(SETTINGS.get("copy-to-dir", ""))
 
     if SETTINGS.get("copy-tv-shows-to-dir"):
         # Check whether this is a TV show
@@ -305,12 +340,12 @@ def torrent_downloaded(torrent):
                     os.path.expanduser(SETTINGS["copy-tv-shows-to-dir"]), tv_show_name)
 
                 try:
-                    os.mkdir(to_system_encoding(copy_to), 0750)
+                    os.mkdir(S(copy_to), 0750)
                 except EnvironmentError as e:
                     if e.errno != errno.EEXIST:
                         raise e
     if copy_to:
-        copy_torrent(torrent, to_system_encoding(copy_to))
+        copy_torrent(torrent, S(copy_to))
         db_torrent["copied"] = True
         save_db_torrent(db_torrent)
 
