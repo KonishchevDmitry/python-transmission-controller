@@ -2,6 +2,8 @@
 
 """Controls transmission daemon to save user from routine operations."""
 
+from __future__ import unicode_literals
+
 import errno
 import getopt
 import json
@@ -11,7 +13,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 
 import pymongo
@@ -25,10 +26,16 @@ import pycl.misc
 
 from pycl import constants
 from pycl.core import Error, LogicalError
-from pycl.misc import to_unicode as U
-from pycl.misc import to_system_encoding as S
+from pycl.main import system_encoding
+from pycl.misc import syscall_wrapper
 
 LOG = logging.getLogger("transmission-controller")
+
+SETTINGS = None
+"""Transmission configuration file settings."""
+
+TRANSMISSION = None
+"""Transmission client connection."""
 
 
 def check_free_space(download_dir):
@@ -40,9 +47,12 @@ def check_free_space(download_dir):
     # df gives a different output for "dir" and "dir/"
     download_dir += "/"
 
-    process = subprocess.Popen([ "df", S(download_dir) ],
+    process = subprocess.Popen([ "df", download_dir ],
         stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+
     stdout, stderr = process.communicate()
+    stdout = stdout.decode(system_encoding())
+    stderr = stderr.decode(system_encoding())
 
     if process.returncode:
         raise Error("df returned an error for {0}: {1}.",
@@ -54,7 +64,7 @@ def check_free_space(download_dir):
     free_space = 100 - int(re.match(r"^(\d+)%$", usage).group(1))
 
     if free_space <= SETTINGS["free-space-threshold"]:
-        LOG.info(u"We don't have enough free space on %s: %s%% vs %s%%.",
+        LOG.info("We don't have enough free space on %s: %s%% vs %s%%.",
             device, free_space, SETTINGS["free-space-threshold"])
         return False
     else:
@@ -73,13 +83,13 @@ def cleanup_fs(torrents):
 
         if torrents and not check_free_space(download_dir):
             for torrent in torrents:
-                LOG.info(u"Removing torrent %s to get a free space on the disk...", torrent.name)
+                LOG.info("Removing torrent %s to get a free space on the disk...", torrent.name)
                 remove_torrent(torrent)
 
                 if check_free_space(download_dir):
                     break
     except Exception as e:
-        LOG.error(u"Failed to cleanup the filesystem: %s", e)
+        LOG.error("Failed to cleanup the file system: %s", e)
 
 
 def control_transmission(action = None):
@@ -92,14 +102,14 @@ def control_transmission(action = None):
 
     for torrent in torrents:
         status = torrent.status
-        LOG.debug(u"Checking torrent %s (%s)...", torrent.name, status)
+        LOG.debug("Checking torrent %s (%s)...", torrent.name, status)
 
         if action == "start" and status == "stopped":
-            LOG.info(u"Starting torrent %s...", torrent.name)
+            LOG.info("Starting torrent %s...", torrent.name)
             TRANSMISSION.start(torrent.hashString)
             status = "seeding" if torrent.doneDate else "downloading"
         elif action == "stop" and status != "stopped":
-            LOG.info(u"Stopping torrent %s...", torrent.name)
+            LOG.info("Stopping torrent %s...", torrent.name)
             TRANSMISSION.stop(torrent.hashString)
             status = "stopped"
 
@@ -112,7 +122,7 @@ def control_transmission(action = None):
             if time.time() >= last_announce + SETTINGS["max-announce-interval"] * constants.MINUTE_SECONDS:
                 # Notice: doesn't work without patching transmission if tracker
                 # sends its own min announce interval
-                LOG.debug(u"Reannouncing torrent %s...", torrent.name)
+                LOG.debug("Reannouncing torrent %s...", torrent.name)
                 TRANSMISSION.reannounce(torrent.hashString)
 
         if torrent.doneDate:
@@ -122,7 +132,7 @@ def control_transmission(action = None):
                 SETTINGS.get("max-seed-time", -1) >= 0 and
                 time.time() - torrent.doneDate >= SETTINGS["max-seed-time"]
             ):
-                LOG.info(u"Torrent %s has seeded enough time to delete it. Deleting it...", torrent.name)
+                LOG.info("Torrent %s has seeded enough time to delete it. Deleting it...", torrent.name)
                 remove_torrent(torrent)
             else:
                 removable_torrents.append(torrent)
@@ -134,30 +144,31 @@ def control_transmission(action = None):
 def copy_torrent(torrent, destination):
     """Copies the specified torrent to the "copy to" dir."""
 
-    LOG.info(u"Copying torrent %s to %s:", torrent.name, destination)
+    LOG.info("Copying torrent %s to %s:", torrent.name, destination)
 
     for torrent_file in torrent.files().itervalues():
         if not torrent_file["selected"]:
             continue
 
         path = os.path.normpath(torrent_file["name"]).strip("/")
-        LOG.debug(u"Copying file %s...", path)
+        LOG.debug("Copying file %s...", path)
 
         try:
-            os.makedirs(S(os.path.join(destination, os.path.dirname(path))), 0750)
+            os.makedirs(os.path.join(destination, os.path.dirname(path)), 0750)
         except EnvironmentError as e:
             if e.errno != errno.EEXIST:
                 raise e
 
-        fd = os.open(S(os.path.join(destination, path)),
-            os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0640)
+        fd = syscall_wrapper(
+            os.open, os.path.join(destination, path),
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0640)
 
         try:
             shutil.copyfile(
-                S(os.path.join(torrent.downloadDir, path)),
-                S(os.path.join(destination, path)))
+                os.path.join(torrent.downloadDir, path),
+                os.path.join(destination, path))
         finally:
-            os.close(fd)
+            syscall_wrapper(os.close, fd)
 
 
 def db():
@@ -192,7 +203,7 @@ def get_torrent_uuid(torrent):
 def main():
     """The script's main function."""
 
-    pycl.main.set_environment()
+    pycl.main.setup_environment()
 
     # Parsing command line arguments -->
     cron_mode = False
@@ -233,7 +244,7 @@ def main():
         pid_file_fd = pycl.daemon.acquire_pidfile(pid_file)
     except pycl.daemon.PidFileLocked as e:
         if cron_mode:
-            LOG.debug(u"Exiting: %s", e)
+            LOG.debug("Exiting: %s", e)
         else:
             raise
     else:
@@ -249,8 +260,8 @@ def main():
 
             control_transmission(action)
         finally:
-            pycl.misc.syscall_wrapper(os.close, pid_file_fd)
-            pycl.misc.syscall_wrapper(os.unlink, S(pid_file))
+            syscall_wrapper(os.close, pid_file_fd)
+            syscall_wrapper(os.unlink, pid_file)
 
 
 def move_copied_torrents():
@@ -262,20 +273,19 @@ def move_copied_torrents():
     if not copy_to or not move_to:
         return
 
-    for item in os.listdir(S(copy_to)):
-        item = U(item)
+    for item in os.listdir(copy_to):
         item_path = os.path.join(copy_to, item)
 
-        LOG.info(u"Moving %s to %s...", item_path, move_to if move_to.endswith("/") else move_to + "/")
+        LOG.info("Moving %s to %s...", item_path, move_to if move_to.endswith("/") else move_to + "/")
 
         for dup_id in xrange(0, 10):
             if dup_id:
-                dest_item_path = os.path.join(move_to, u"DUP_{0}.{1}".format(dup_id, item))
+                dest_item_path = os.path.join(move_to, "DUP_{0}.{1}".format(dup_id, item))
             else:
                 dest_item_path = os.path.join(move_to, item)
 
             try:
-                os.stat(S(dest_item_path))
+                os.stat(dest_item_path)
             except EnvironmentError as e:
                 if e.errno == errno.ENOENT:
                     break
@@ -284,7 +294,7 @@ def move_copied_torrents():
         else:
             raise LogicalError()
 
-        os.rename(S(item_path), S(dest_item_path))
+        os.rename(item_path, dest_item_path)
 
 
 def remove_old_db_torrents(torrents):
@@ -340,12 +350,12 @@ def torrent_downloaded(torrent):
                     os.path.expanduser(SETTINGS["copy-tv-shows-to-dir"]), tv_show_name)
 
                 try:
-                    os.mkdir(S(copy_to), 0750)
+                    os.mkdir(copy_to, 0750)
                 except EnvironmentError as e:
                     if e.errno != errno.EEXIST:
                         raise e
     if copy_to:
-        copy_torrent(torrent, S(copy_to))
+        copy_torrent(torrent, copy_to)
         db_torrent["copied"] = True
         save_db_torrent(db_torrent)
 
