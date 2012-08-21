@@ -18,6 +18,7 @@ import time
 import pymongo
 
 import transmissionrpc.client
+import transmissionrpc.error
 
 import pycl.daemon
 import pycl.log
@@ -259,6 +260,9 @@ def main():
                 timeout = constants.MINUTE_SECONDS)
 
             control_transmission(action)
+        except transmissionrpc.error.TransmissionError as e:
+            # Ignore all Transmission errors because it crashes too frequently
+            LOG.warning("Transmission error: %s", e)
         finally:
             syscall_wrapper(os.close, pid_file_fd)
             syscall_wrapper(os.unlink, pid_file)
