@@ -1,2 +1,2 @@
-A simple python script that controls transmission daemon to save user from routine operations.
+A simple Python script that controls transmission daemon to save user from routine operations.
 It's intended to be run from cron.
