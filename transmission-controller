@@ -6,6 +6,7 @@ from __future__ import unicode_literals
 
 import errno
 import getopt
+import getpass
 import json
 import logging
 import os
@@ -31,6 +32,9 @@ from pycl.main import system_encoding
 from pycl.misc import syscall_wrapper
 
 LOG = logging.getLogger("transmission-controller")
+
+USER = getpass.getuser()
+"""User the script is run under."""
 
 SETTINGS = None
 """Transmission configuration file settings."""
@@ -155,14 +159,14 @@ def copy_torrent(torrent, destination):
         LOG.debug("Copying file %s...", path)
 
         try:
-            os.makedirs(os.path.join(destination, os.path.dirname(path)), 0750)
+            os.makedirs(os.path.join(destination, os.path.dirname(path)), 0777)
         except EnvironmentError as e:
             if e.errno != errno.EEXIST:
                 raise e
 
         fd = syscall_wrapper(
             os.open, os.path.join(destination, path),
-                os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0640)
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0666)
 
         try:
             shutil.copyfile(
@@ -175,7 +179,7 @@ def copy_torrent(torrent, destination):
 def db():
     """Returns the database connection."""
 
-    return pymongo.Connection()["transmission-controller"]
+    return pymongo.Connection()["transmission-controller-" + USER]
 
 
 def get_db_torrent(torrent):
@@ -239,7 +243,7 @@ def main():
         pycl.log.setup(level = logging.ERROR if cron_mode else None)
 
 
-    pid_file = "/var/run/lock/transmission-controller"
+    pid_file = "/var/run/lock/transmission-controller-" + USER
 
     try:
         pid_file_fd = pycl.daemon.acquire_pidfile(pid_file)
@@ -254,8 +258,11 @@ def main():
             with open(os.path.expanduser("~/.config/transmission-daemon/settings.json"), "r") as config:
                 SETTINGS = json.load(config)
 
+            os.umask(SETTINGS["umask"])
+
             global TRANSMISSION
             TRANSMISSION = transmissionrpc.client.Client(
+                address = "http://localhost:{}/{}/rpc".format(SETTINGS["rpc-port"], SETTINGS["rpc-url"].strip("/")),
                 user = SETTINGS["rpc-username"], password = SETTINGS["rpc-plain-password"],
                 timeout = constants.MINUTE_SECONDS)
 
@@ -354,7 +361,7 @@ def torrent_downloaded(torrent):
                     os.path.expanduser(SETTINGS["copy-tv-shows-to-dir"]), tv_show_name)
 
                 try:
-                    os.mkdir(copy_to, 0750)
+                    os.mkdir(copy_to, 0777)
                 except EnvironmentError as e:
                     if e.errno != errno.EEXIST:
                         raise e
