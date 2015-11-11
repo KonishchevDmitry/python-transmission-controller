@@ -1,2 +1,3 @@
-A simple Python script that controls transmission daemon to save user from routine operations.
-It's intended to be run from cron.
+A simple Python script that controls transmission daemon to save user from routine operations. It's intended to be run from cron.
+
+Deprecated by https://github.com/KonishchevDmitry/transmission-controller
